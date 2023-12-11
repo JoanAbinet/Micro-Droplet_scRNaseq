@@ -1,0 +1,207 @@
+---
+title: "SCENIC"
+author: "Abinet Joan"
+date: "`r format (Sys.time(), format='%Y-%m-%d %H:%M:%S %z')`"
+output:
+  pdf_document: 
+    toc: true
+    toc_depth: 2
+  html_document: default
+header-includes:
+  - |
+    ```{=latex}
+    \usepackage{fvextra}
+    \DefineVerbatimEnvironment{Highlighting}{Verbatim}{
+      breaksymbolleft={}, 
+      showspaces = false,
+      showtabs = false,
+      breaklines,
+      commandchars=\\\{\}
+    }
+    ```
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Loading packages
+```{r cars}
+suppressMessages(library(dplyr))
+suppressMessages(library(Seurat))
+suppressMessages(library(patchwork))
+suppressMessages(library(ggplot2))
+suppressMessages(library(ComplexHeatmap))
+suppressMessages(library(SCENIC))
+suppressMessages(library(stringr))
+suppressMessages(library(tidyHeatmap))
+```
+
+# Loading data
+```{r}
+Cell_HiveAnnotate <- readRDS("../Hive-2-Annotation/lavage_Hive_annotated.rds")
+```
+
+
+# prepare cellinfo et expression matrix
+```{r, eval = FALSE}
+exprMat <- Cell_HiveAnnotate@assays$RNA@data
+cellInfo <- data.frame(seuratCluster=Idents(Cell_HiveAnnotate))
+cellInfo$Annotation <- Cell_HiveAnnotate$Annotation
+cellInfo$nGene <- colSums(exprMat>0)
+
+dir.create ("int")
+saveRDS(exprMat, file = "int/exprMat.Rds")
+saveRDS(cellInfo, file = "int/cellInfo.Rds")
+```
+
+
+```{r}
+cellInfo <- readRDS(file = "int/cellInfo.Rds")
+exprMat <- readRDS(file = "int/exprMat.Rds")
+```
+
+
+# Download binding motifs for HUMAN
+```{r, eval = FALSE}
+dbFiles <- c("https://resources.aertslab.org/cistarget/databases/old/homo_sapiens/hg19/refseq_r45/mc9nr/gene_based/hg19-500bp-upstream-7species.mc9nr.feather",
+"https://resources.aertslab.org/cistarget/databases/old/homo_sapiens/hg19/refseq_r45/mc9nr/gene_based/hg19-tss-centered-10kb-7species.mc9nr.feather")
+
+dir.create("cisTarget_databases");
+setwd("cisTarget_databases") 
+for(featherURL in dbFiles)
+{
+  download.file(featherURL, destfile=basename(featherURL)) # saved in current dir
+}
+```
+
+# Initialise Scenic
+```{r}
+data(list="motifAnnotations_hgnc_v9", package="RcisTarget")
+motifAnnotations_hgnc <- motifAnnotations_hgnc_v9
+
+org <- "hgnc"
+dbDir <- "cisTarget_databases"
+dbDir <- path.expand(dbDir)
+myDatasetTitle <- "SCENIC Analysis"
+data(defaultDbNames)
+dbs <- defaultDbNames[[org]]
+scenicOptions <- initializeScenic(org=org, dbDir=dbDir, dbs=dbs, nCores=25) 
+```
+
+2. Filter by the number of cells in which the gene is detected. 
+```{r, eval = FALSE}
+exprMat <- as.matrix(exprMat) # need a regulat matrix
+genesKept <- geneFiltering(exprMat, scenicOptions=scenicOptions,
+                           minCountsPerGene=3*.01*ncol(exprMat),
+                           minSamples=ncol(exprMat)*.01)
+
+dim(exprMat) # 34235  
+exprMat_filtered <- exprMat[genesKept, ]
+dim(exprMat_filtered) # 8322 
+```
+
+# Correlation
+```{r, eval = FALSE}
+runCorrelation(exprMat_filtered, scenicOptions)
+```
+
+
+```{r, eval = FALSE}
+runGenie3(exprMat_filtered, scenicOptions)
+```
+
+```{r, eval = FALSE}
+scenicOptions@settings$verbose <- TRUE
+scenicOptions@settings$nCores <- 10
+scenicOptions@settings$seed <- 123
+
+runSCENIC_1_coexNetwork2modules(scenicOptions)
+runSCENIC_2_createRegulons(scenicOptions)
+runSCENIC_3_scoreCells(scenicOptions, exprMat_filtered)
+```
+
+# Plotting the results
+
+## Viewing markers based on specificity score
+```{r, message=FALSE, warning=FALSE, results= "hide", fig.show='hide'}
+regulonAUC <- loadInt(scenicOptions, "aucell_regulonAUC") # require file int/3.4_regulonAUC.Rds
+
+
+rss <- calcRSS(AUC=getAUC(regulonAUC), cellAnnotation=cellInfo[colnames(regulonAUC), "seuratCluster"])
+#rssPlot <- plotRSS(rss["Mafb (44g)",])
+rssPlot <- plotRSS(rss)
+plotly::ggplotly(rssPlot$plot)
+```
+
+
+## Plot on Heatmap the 10 markers the most specific of each cell type
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+#rss <- rss[,c(8,11,2,3,7,1,12,9,4,6,5,10)]
+rss <- rss[,c(3,11,1,7,5,6,2,8,4,10,9)]
+
+# J'ai changé l'ordre des clusters donc à modifier
+rss <- rss[,c(1,8,3,6,9,5,2,4,10,7,11)]
+
+top_tf <- c()
+for (i in 1:length(colnames(rss))) {
+  
+  TFs <- sort(rss[,i], decreasing = T)
+  top_10 <- head(TFs, 10)
+  top_tf <- c(top_tf,top_10)
+}
+
+length(top_tf)
+
+top_tf
+ 
+# Creation of the Heatmap
+
+regulonAUC.mat <- regulonAUC@assays@data@listData$AUC
+Subset_regulonActivity <-regulonAUC.mat[names(top_tf),]
+
+regulonActivity_byCellType_Scaled <- t(scale(t(Subset_regulonActivity), center = T, scale=T))
+
+colors <- c("#ff9305", "#56B4E9", "#009E73", "#F0E442", "#0072B2",
+                "#877f5f", "#CC79A7", "#c0bec2", "#854e07", "#a865eb",
+                "#00A087", "#FF9DA7")
+
+names(colors) <- levels(Cell_HiveAnnotate$Annotation) 
+
+df <- as.data.frame(Cell_HiveAnnotate$Annotation)
+colnames(df) <- "CellType"
+
+color_df <- list(CellType = 
+                   c("C1 - AM" = "orange",
+                     "C2 - AM" = "#78550b",
+                     "C3 - AM" = "yellow",
+                     "C4 - MoMac" = "#33A02C",
+                     "C5 - Neu" = "#8c6a94",
+                     "C6 - Neu" = "#600078",
+                     "C7 - LT" = "lightblue",
+                     "C8 - LT" = "#584acf",
+                     "C9 - Eos" = "#f249f5",
+                     "C10 - Other" = "gray",
+                     "C11 - Mast" = "gray"))
+
+Heatmap <- Heatmap(regulonActivity_byCellType_Scaled, name="Regulon activity", show_column_names = FALSE, 
+        column_split = factor(Cell_HiveAnnotate$Annotation),
+        cluster_column_slices = F,
+        cluster_rows = F,
+        column_title_rot = 90,
+        top_annotation = HeatmapAnnotation(df = df, col = color_df),
+        show_column_dend = F)
+
+# tidyHeatmap::save_pdf(Heatmap,"Scenic_Hive.pdf", width = 40, height = 50, units = "cm")
+```
+
+```{r, fig.width=10, fig.height=20}
+Heatmap
+```
+
+
+```{r}
+sessionInfo()
+```
+

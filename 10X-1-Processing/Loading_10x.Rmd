@@ -1,0 +1,110 @@
+---
+title: "Loading and processing 10x data"
+author: "Abinet Joan"
+date: "`r format (Sys.time(), format='%Y-%m-%d %H:%M:%S %z')`"
+output:
+  pdf_document: 
+    toc: true
+    toc_depth: 2
+  html_document: default
+header-includes:
+  - |
+    ```{=latex}
+    \usepackage{fvextra}
+    \DefineVerbatimEnvironment{Highlighting}{Verbatim}{
+      breaksymbolleft={}, 
+      showspaces = false,
+      showtabs = false,
+      breaklines,
+      commandchars=\\\{\}
+    }
+    ```
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Loading packages
+```{r}
+suppressMessages(library(dplyr))
+suppressMessages(library(Seurat))
+suppressMessages(library(patchwork))
+suppressMessages(library(ggplot2))
+suppressMessages(library(writexl))
+suppressMessages(library(SingleR))
+suppressMessages(library(scuttle))
+suppressMessages(library(scRNAseq))
+suppressMessages(library(RColorBrewer))
+suppressMessages(library(stringr))
+suppressMessages(library(formatR))
+```
+
+
+# Loading data
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+# The path should be modifie to include your directory of the cellranger output
+all_dirs <- dir(path = "Data/outs/per_sample_outs/", full.names = T)
+
+list_sample <- list()
+for (i in 1:length(all_dirs)) {
+  
+  # here the file path describe the filtered matrix from cellranger output
+  Seq_raw_file <- Read10X(data.dir = paste0(all_dirs[i],"/count/sample_filtered_feature_bc_matrix/"))
+  Seurat_file <- CreateSeuratObject(counts = Seq_raw_file, project = str_sub(all_dirs[i],-8,-1), min.cells = 3, min.features =   150)
+  list_sample <- append(list_sample, Seurat_file)
+}
+
+lavage_cells10x <- merge(list_sample[[1]], y = list_sample[-1], add.cell.ids = c("1","2","3", "4"), project = "bronchoalveolar_cells")
+```
+
+# QC
+```{r fig.width=6, fig.height=4}
+lavage_cells10x[["percent.mt"]] <- PercentageFeatureSet(lavage_cells10x, pattern = "^MT-")
+VlnPlot(lavage_cells10x, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0.1)
+```
+
+
+```{r fig.width=6, fig.height=4}
+lavage_cells10x <- subset(lavage_cells10x, subset = nFeature_RNA < 8000 & nFeature_RNA > 400 & nCount_RNA > 800 & percent.mt < 5) 
+VlnPlot(lavage_cells10x, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), group.by = "orig.ident", ncol = 3, pt.size = 0.1)
+#ggsave("VlnPlot_QC.png", height = 8, width = 12)
+```
+
+# Normalisation + scalin
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+lavage_cells10x <- NormalizeData(lavage_cells10x, normalization.method = "LogNormalize", scale.factor = 10000)
+lavage_cells10x <- FindVariableFeatures(lavage_cells10x, selection.method = "vst", nfeatures = 2000) 
+
+all.genes <- rownames(lavage_cells10x)
+lavage_cells10x <- ScaleData(lavage_cells10x, features = all.genes)
+```
+
+# Dimension reduction
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+lavage_cells10x <- RunPCA(lavage_cells10x, features = VariableFeatures(object = lavage_cells10x))
+#DimPlot(lavage_cells10x, reduction = "pca")
+
+lavage_cells10x <- FindNeighbors(lavage_cells10x, dims = 1:16)
+lavage_cells10x <- FindClusters(lavage_cells10x, resolution = 0.5) 
+lavage_cells10x <- RunUMAP(lavage_cells10x, dims = 1:16)
+```
+
+
+```{r fig.width=6, fig.height=4}
+DimPlot(lavage_cells10x, reduction = "umap", label = T)
+```
+
+```{r fig.width=10, fig.height=4}
+DimPlot(lavage_cells10x, reduction = "umap", split.by = "orig.ident", label = T)
+```
+
+```{r}
+saveRDS(lavage_cells10x, "lavage_cells10x.rds")
+```
+
+```{r}
+sessionInfo()
+```
+
+

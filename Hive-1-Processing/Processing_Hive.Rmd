@@ -1,0 +1,109 @@
+---
+title: "Processing Hive Data"
+author: "Abinet Joan"
+date: "`r format (Sys.time(), format='%Y-%m-%d %H:%M:%S %z')`"
+output:
+  pdf_document: 
+    toc: true
+    toc_depth: 2
+  html_document: default
+header-includes:
+  - |
+    ```{=latex}
+    \usepackage{fvextra}
+    \DefineVerbatimEnvironment{Highlighting}{Verbatim}{
+      breaksymbolleft={}, 
+      showspaces = false,
+      showtabs = false,
+      breaklines,
+      commandchars=\\\{\}
+    }
+    ```
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Loading packages
+```{r}
+suppressMessages(library(dplyr))
+suppressMessages(library(Seurat))
+suppressMessages(library(patchwork))
+suppressMessages(library(ggplot2))
+suppressMessages(library(stringr))
+suppressMessages(library(SingleR))
+suppressMessages(library(scuttle))
+suppressMessages(library(scRNAseq))
+suppressMessages(library(RColorBrewer))
+suppressMessages(library(formatR))
+```
+
+
+# Loading data
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+# The path should be modifie to include your directory of the Hive count matrix
+all_dirs <- dir(path = "./Counts", full.names = T)
+
+list_sample <- list()
+for (dir in all_dirs) {
+  
+  files <- list.files(dir)
+  Count_file <- files[grep("TCM.tsv.gz$", files)]
+  Countdata <- read.table(paste0(dir,"/",Count_file), sep = "\t", header = T, row.names=1) 
+  
+  Lavage_cellsHive <- CreateSeuratObject(counts = Countdata, project = str_sub(dir,-5,-1))
+  list_sample <- append(list_sample, Lavage_cellsHive)
+  
+}
+
+Lavage_cellsHive <- merge(list_sample[[1]], y = list_sample[-1], add.cell.ids = c("1","2","3", "4"), project = "bronchoalveolar_cells")
+```
+
+# QC
+```{r fig.width=6, fig.height=4}
+Lavage_cellsHive[["percent.mt"]] <- PercentageFeatureSet(Lavage_cellsHive, pattern = "^MT-")# MT : human cells
+VlnPlot(Lavage_cellsHive, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0.1)
+```
+
+```{r fig.width=6, fig.height=4}
+Lavage_cellsHive <- subset(Lavage_cellsHive, subset = nFeature_RNA < 6000 & nCount_RNA > 800 & percent.mt < 20 & nFeature_RNA > 400 ) 
+VlnPlot(Lavage_cellsHive, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0.1, group.by = "orig.ident")
+#ggsave("plot/QC.png", width = 12, height = 6)
+```
+
+# Normalisation + scalin
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+Lavage_cellsHive <- NormalizeData(Lavage_cellsHive, normalization.method = "LogNormalize", scale.factor = 10000)
+Lavage_cellsHive <- FindVariableFeatures(Lavage_cellsHive, selection.method = "vst", nfeatures = 2000) 
+
+all.genes <- rownames(Lavage_cellsHive)
+Lavage_cellsHive <- ScaleData(Lavage_cellsHive, features = all.genes)
+```
+
+# PCA
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+Lavage_cellsHive <- RunPCA(Lavage_cellsHive, features = VariableFeatures(object = Lavage_cellsHive))
+
+Lavage_cellsHive <- FindNeighbors(Lavage_cellsHive, dims = 1:15)
+Lavage_cellsHive <- FindClusters(Lavage_cellsHive, resolution = 0.5) 
+Lavage_cellsHive <- RunUMAP(Lavage_cellsHive, dims = 1:15)
+
+DimPlot(Lavage_cellsHive, reduction = "umap", label = T)
+#ggsave("plot/umapHive_total.png", width = 12, height = 8)
+```
+
+```{r, fig.width=10, fig.height=4}
+DimPlot(Lavage_cellsHive, reduction = "umap", split.by = "orig.ident")
+#ggsave("plot/umapHive.png", width = 18, height = 6)
+```
+
+
+```{r}
+saveRDS(Lavage_cellsHive, "Lavage_cellsHive.rds")
+```
+
+
+```{r}
+sessionInfo()
+```
