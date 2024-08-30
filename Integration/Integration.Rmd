@@ -1,0 +1,128 @@
+---
+title: "Integration 10X Hive"
+output:
+  pdf_document: default
+  html_document: default
+date: "`r format (Sys.time(), format='%Y-%m-%d %H:%M:%S %z')`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Loading package
+```{r}
+suppressMessages(library(formatR))
+suppressMessages(library(dplyr))
+suppressMessages(library(Seurat))
+suppressMessages(library(ggplot2))
+suppressMessages(library(scales))
+Sys.setenv(LANG = "en")
+```
+
+```{r}
+knitr::opts_chunk$set(tidy.opts = list(width.cutoff = 60), tidy = TRUE)
+```
+
+# Loading data
+```{r}
+data10X <- readRDS("../Data/lavage_cells10xV2.rds")
+
+data10X$Annotation <- data10X$seurat_clusters
+levels(data10X$Annotation) <- c("10X C1 - AM", "10X C10 - LT", "10X C8 - LT", "10X C4 - MoMac", "10X C11 - LT", "10X C5 - Neu", "10X C2 - AM", "10X C7 - LT", "10X C9 - LT", "10X C13 - Epith", "10X C6 - Neu", "10X C12 - Mast", "10X C3 - AM")
+
+data10X$Annotation <- factor(data10X$Annotation, levels =  c("10X C1 - AM", "10X C2 - AM", "10X C3 - AM", "10X C4 - MoMac", "10X C5 - Neu", "10X C6 - Neu", "10X C7 - LT", "10X C8 - LT", "10X C9 - LT", "10X C10 - LT", "10X C11 - LT", "10X C12 - Mast",  "10X C13 - Epith"))
+
+
+dataHive <- readRDS("../Data/Lavage_cellsHive.rds")
+dataHive$Annotation <- dataHive$seurat_clusters
+levels(dataHive$Annotation) <- c("Hive C1 - AM", "Hive C7 - LT", "Hive C3 - AM", "Hive C8 - LT", "Hive C6 - Neu", "Hive C4 - MoMac", "Hive C10 - Other", "Hive C2 - AM", "Hive C5 - Neu", "Hive C9 - Eos", "Hive C11 - Mast")
+dataHive$Annotation <- factor(dataHive$Annotation, levels =  c("Hive C1 - AM", "Hive C2 - AM", "Hive C3 - AM", "Hive C4 - MoMac", "Hive C5 - Neu", "Hive C6 - Neu", "Hive C7 - LT", "Hive C8 - LT", "Hive C9 - Eos", "Hive C10 - Other", "Hive C11 - Mast"))
+```
+
+# listing metadata
+```{r}
+Metadata_10x <- data10X@meta.data[,c(1,6,8)]
+
+Metadata_Hive <- dataHive@meta.data[,c("orig.ident","Annotation","seurat_clusters")]
+
+metadata.list <- list(Metadata_10x, Metadata_Hive)
+```
+
+# listing count
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+Count_10x <- data10X@assays$RNA@counts
+
+Count_Hive <- dataHive@assays$RNA@counts
+
+data.list <- list(Count_10x, Count_Hive)
+
+Integrate_object <- CreateSeuratObject(counts = data.list, meta.data = metadata.list)
+```
+
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+Integrate_object <- merge(data10X, dataHive)
+```
+
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+Integrate_object$Group <- Integrate_object$orig.ident
+Integrate_object$Group <- as.factor(Integrate_object$Group)
+levels(Integrate_object$Group) <- c("Hive","Hive","Hive","Hive","10X","10X","10X","10X")
+```
+
+# Integration
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+Integrate_object[["RNA"]] <- split(Integrate_object[["RNA"]], f=Integrate_object$Group )
+```
+
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+Integrate_object <- NormalizeData(Integrate_object)
+Integrate_object <- FindVariableFeatures(Integrate_object)
+Integrate_object <- ScaleData(Integrate_object)
+Integrate_object <- RunPCA(Integrate_object)
+```
+
+# RPCA
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+Integrate_object <- IntegrateLayers(Integrate_object, method = RPCAIntegration, orig.reduction = "pca", new.reduction = "integrated.rpca")
+
+Integrate_object <- FindNeighbors(Integrate_object, reduction = "integrated.rpca", dims = 1:30)
+Integrate_object <- FindClusters(Integrate_object, resolution = 1)
+Integrate_object <- RunUMAP(Integrate_object, dims = 1:30, reduction = "integrated.rpca")
+```
+
+
+```{r, fig.width=10, fig.height=6}
+DimPlot(Integrate_object, reduction = "umap", group.by = c("Group"), label = T)
+```
+
+# Merging Annotation
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+Integrate_object$Annotation_merged <- Integrate_object$Annotation
+Integrate_object$Annotation_merged <- as.factor(Integrate_object$Annotation_merged)
+levels(Integrate_object$Annotation_merged) <- c("10X - AM", "10X - LT", "10X - LT", "10X - Mast", "10X - Epith", "10X - AM", "10X - AM", "10X - MoMac", "10X - Neu", "10X - Neu", "10X - LT", "10X - LT", "10X - LT", "Hive - AM", "Hive - Epith", "Hive - Mast", "Hive - AM", "Hive - AM", "Hive - MoMac", "Hive - Neu", "Hive - Neu", "Hive - LT", "Hive - LT", "Hive - Eos")
+Integrate_object$Annotation_merged <- factor(Integrate_object$Annotation_merged, levels = c("10X - AM", "10X - MoMac", "10X - Neu", "10X - LT", "10X - Epith", "10X - Mast", "Hive - AM", "Hive - MoMac", "Hive - Neu", "Hive - LT", "Hive - Epith", "Hive - Mast", "Hive - Eos"))
+```
+
+
+# Umap Hive
+```{r, fig.width=10, fig.height=6}
+`%notin%` <- function(x, y) !(x %in% y)
+
+Integrate_object$Hive <- Integrate_object$Annotation_merged
+Integrate_object$Hive[Integrate_object$Hive %notin% c("Hive - AM", "Hive - MoMac", "Hive - Neu", "Hive - LT", "Hive - Epith", "Hive - Mast", "Hive - Eos")] <- NA
+DimPlot(Integrate_object, reduction = "umap", group.by = c("Hive"))
+#ggsave("plot_clusters_pdf/integration_Hive.pdf", width = 9, height = 6)
+```
+
+```{r, fig.width=10, fig.height=6}
+Integrate_object$X10 <- Integrate_object$Annotation_merged
+Integrate_object$X10[Integrate_object$X10 %notin% c("10X - AM", "10X - MoMac", "10X - Neu", "10X - LT", "10X - Epith", "10X - Mast")] <- NA
+DimPlot(Integrate_object, reduction = "umap", group.by = c("X10"), cols = hue_pal()(7))
+#ggsave("plot_clusters_pdf/integration_10X.pdf", width = 9, height = 6)
+```
+
+```{r}
+sessionInfo()
+```
+
