@@ -1,0 +1,144 @@
+---
+title: "Plot Papier"
+author: "Abinet Joan"
+date: "`r format (Sys.time(), format='%Y-%m-%d %H:%M:%S %z')`"
+output:
+  pdf_document: 
+    toc: true
+    toc_depth: 2
+  html_document: default
+header-includes:
+  - |
+    ```{=latex}
+    \usepackage{fvextra}
+    \DefineVerbatimEnvironment{Highlighting}{Verbatim}{
+      breaksymbolleft={}, 
+      showspaces = false,
+      showtabs = false,
+      breaklines,
+      commandchars=\\\{\}
+    }
+    ```
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Loading packages
+```{r}
+suppressMessages(library(dplyr))
+suppressMessages(library(Seurat))
+suppressMessages(library(patchwork))
+suppressMessages(library(ggplot2))
+suppressMessages(library(RColorBrewer))
+suppressMessages(library(dittoSeq))
+suppressMessages(library(ComplexHeatmap))
+suppressMessages(library(plotly))
+suppressMessages(library(tidyHeatmap))
+```
+
+# Loading data
+```{r}
+Cell_HiveAnnotate <- readRDS("../Hive-1-Processing/Lavage_cellsHive.rds")
+```
+
+```{r fig.width=6, fig.height=4}
+DimPlot(Cell_HiveAnnotate, reduction = "umap", group.by = "orig.ident")+ theme(legend.text	 = element_text(size = 15))+ labs(title = NULL)
+#ggsave("Umap_PerSample.pdf", width = 8, height = 4) 
+```
+
+
+```{r fig.width=6, fig.height=4}
+Cell_HiveAnnotate$Annotation <- Cell_HiveAnnotate$seurat_clusters
+levels(Cell_HiveAnnotate$Annotation) <- c("C1 - AM", "C7 - T cell", "C3 - AM", "C8 - T cell", "C6 - Neu", "C4 - MAFB+ MoMac", "C10 - Epithelial cell", "C2 - AM", "C5 - Neu", "C9 - Eos", "C11 - Mast cell")
+
+Cell_HiveAnnotate$Annotation <- factor(Cell_HiveAnnotate$Annotation, levels =  c("C1 - AM", "C2 - AM", "C3 - AM", "C4 - MAFB+ MoMac", "C5 - Neu", "C6 - Neu", "C7 - T cell", "C8 - T cell", "C9 - Eos", "C10 - Epithelial cell", "C11 - Mast cell"))
+
+# Je modifie les couleurs pour qu'elles soient égalent à celle du HIVE
+col <- c("#E2B80C", "#998025", "#AE8052", "#0F8140", "#8A6892", "#4F2569", "#ABD6E4",  "#79C7CB", "#FFC0CB", "#BDBCBC", "#DF15AE")
+
+DimPlot(Cell_HiveAnnotate, group.by = "Annotation", cols = col)+ theme(legend.text	 = element_text(size = 15)) + labs(title = NULL)
+#ggsave("../plot_paper/Umap_Annotation.pdf", width = 8, height = 4) 
+```
+
+# Differential Expression Analysis
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+Idents(Cell_HiveAnnotate) <- "Annotation"
+lavage.markers <- FindAllMarkers(Cell_HiveAnnotate, only.pos = TRUE, min.pct = 0.25)
+
+lavage.markers %>%
+    group_by(cluster) %>%
+    top_n(n = 10, wt = avg_log2FC) -> top10
+
+mat <- as.matrix(GetAssayData(object = Cell_HiveAnnotate, slot = "data")[as.character(top10$gene),])
+
+df <- as.data.frame(Cell_HiveAnnotate$Annotation)
+colnames(df) <- "Clusters"
+color_df <- list(Clusters = 
+                   c("C1 - AM" = "#E2B80C",
+                     "C2 - AM" = "#998025",
+                     "C3 - AM" = "#AE8052",
+                     "C4 - MAFB+ MoMac" = "#0F8140",
+                     "C5 - Neu" = "#8A6892",
+                     "C6 - Neu" = "#4F2569",
+                     "C7 - T cell" = "#ABD6E4",
+                     "C8 - T cell" = "#79C7CB",
+                     "C9 - Eos" = "#FFC0CB",
+                     "C10 - Epithelial cell" = "#BDBCBC",
+                     "C11 - Mast cell" = "gray"))
+
+Heatmap <- Heatmap(t(scale(t(mat))), show_column_names = F,
+        column_split = Cell_HiveAnnotate$Annotation,
+        cluster_column_slices = F,
+        cluster_rows = F,
+        top_annotation = HeatmapAnnotation(df = df, col = color_df),
+        use_raster = F,
+        show_heatmap_legend = F,
+        show_column_dend = F,
+        column_title_rot = 90,
+        row_names_side = "left")
+
+#save_pdf(Heatmap, "Heatmap_Hive.pdf",width = 30, height = 45, units ="cm")
+```
+
+
+# Heatmap top genes per clusters
+```{r fig.width=10, fig.height=20}
+Heatmap
+```
+
+# Dotplot of relevant markers
+```{r fig.width=22, fig.height=8}
+markers_neutro <- c("CSF3R","FCGR3B", "NAMPT", "CXCR2", "S100A8", "S100A9")
+marker_epi <- c("EPCAM", "KRT8", "CDH1", "MUC1")
+Marker_NK <- c("TRDC", "GNLY", "KLRD1", "KLRK1")
+markers_AM <- c("CD68","MARCO", "C1QC", "FABP4")
+markers_mono <- c("CSF1R", "TMEM176B", "NR4A2")
+markers_baso <- c("HDC", "MS4A2", "GATA2", "CPA3", "TPSAB1")
+markers_CD8 <- c("CD8A", "CLIC3")
+Markers_CD4 <- c("CD4", "IL7R")
+Markers_eosinophile <- c("SIGLEC8", "SYNE1", "CLC")
+
+DotPlot(Cell_HiveAnnotate, features = c(markers_AM,markers_mono, "VCAN","MAFB", markers_neutro, "MKI67", "TOP2A",markers_CD8, Markers_CD4, Marker_NK, Markers_eosinophile, marker_epi, markers_baso), 
+        group.by = "Annotation", cols = c("lightgray", "darkorange"),) + theme_classic() + scale_size(range = c(0,12)) + theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.text = element_text(size = 35),
+           legend.text	 = element_text(size = 25), legend.key.height= unit(1, 'cm'),
+        legend.key.width= unit(2, 'cm'))
+
+#ggsave("Dotplot_annotated.pdf", width = 35, height = 10)
+```
+
+```{r fig.width=5, fig.height=10}
+var_order <- c(1,4,5,6,7,8,9,10,11,2,3)
+dittoBarPlot(Cell_HiveAnnotate, "Annotation", group.by ="orig.ident", var.labels.reorder = var_order, color.panel = col)
+```
+
+
+```{r}
+#saveRDS(Cell_HiveAnnotate, "lavage_Hive_annotated.rds")
+```
+
+```{r}
+sessionInfo()
+```

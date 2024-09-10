@@ -1,0 +1,126 @@
+---
+title: "Data Low QC"
+author: "Abinet Joan"
+date: "`r format (Sys.time(), format='%Y-%m-%d %H:%M:%S %z')`"
+output:
+  pdf_document: 
+    toc: true
+    toc_depth: 2
+  html_document: default
+header-includes:
+  - |
+    ```{=latex}
+    \usepackage{fvextra}
+    \DefineVerbatimEnvironment{Highlighting}{Verbatim}{
+      breaksymbolleft={}, 
+      showspaces = false,
+      showtabs = false,
+      breaklines,
+      commandchars=\\\{\}
+    }
+    ```
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Loading packages
+```{r}
+suppressMessages(library(dplyr))
+suppressMessages(library(Seurat))
+suppressMessages(library(patchwork))
+suppressMessages(library(ggplot2))
+suppressMessages(library(writexl))
+suppressMessages(library(SingleR))
+suppressMessages(library(scuttle))
+suppressMessages(library(scRNAseq))
+suppressMessages(library(RColorBrewer))
+suppressMessages(library(stringr))
+suppressMessages(library(formatR))
+```
+
+# Loading data
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+all_dirs <- dir(path = "./Counts", full.names = T)
+
+list_sample <- list()
+for (dir in all_dirs) {
+  
+  files <- list.files(dir)
+  Count_file <- files[grep("TCM.tsv.gz$", files)]
+  Countdata <- read.table(paste0(dir,"/",Count_file), sep = "\t", header = T, row.names=1) 
+  
+  Lavage_cellsHive <- CreateSeuratObject(counts = Countdata, project = str_sub(dir,-5,-1), min.features = 100)
+  list_sample <- append(list_sample, Lavage_cellsHive)
+  
+}
+
+Lavage_cellsHive <- merge(list_sample[[1]], y = list_sample[-1], add.cell.ids = c("1","2","3", "4"), project = "bronchoalveolar_cells")
+```
+
+# QC
+```{r fig.width=6, fig.height=4}
+Lavage_cellsHive[["percent.mt"]] <- PercentageFeatureSet(Lavage_cellsHive, pattern = "^MT-")# MT : human cells
+Lavage_cellsHive <- subset(Lavage_cellsHive, subset = nFeature_RNA < 8000 & percent.mt < 20) 
+VlnPlot(Lavage_cellsHive, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0.1, group.by = "orig.ident")
+#ggsave("plot/QC.png", width = 12, height = 6)
+```
+
+# Normalisation + scalin
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+Lavage_cellsHive <- NormalizeData(Lavage_cellsHive, normalization.method = "LogNormalize", scale.factor = 10000)
+Lavage_cellsHive <- FindVariableFeatures(Lavage_cellsHive, selection.method = "vst", nfeatures = 2000) 
+
+all.genes <- rownames(Lavage_cellsHive)
+Lavage_cellsHive <- ScaleData(Lavage_cellsHive, features = all.genes)
+```
+
+# Dimension reduction
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+Lavage_cellsHive <- RunPCA(Lavage_cellsHive, features = VariableFeatures(object = Lavage_cellsHive))
+
+Lavage_cellsHive <- FindNeighbors(Lavage_cellsHive, dims = 1:15)
+Lavage_cellsHive <- FindClusters(Lavage_cellsHive, resolution = 0.5) 
+Lavage_cellsHive <- RunUMAP(Lavage_cellsHive, dims = 1:15)
+```
+
+# umap
+```{r fig.width=8, fig.height=4}
+Lavage_cellsHive$Annotation <- Lavage_cellsHive$seurat_clusters
+Lavage_cellsHive$Annotation <- as.factor(Lavage_cellsHive$Annotation)
+levels(Lavage_cellsHive$Annotation) <- c("C1-AM", "C2-T cell", "C3-Unidentified", "C4-AM", "C5-Neu", "C6-T cell", "C7-Mast Cell", "C8-Mo-Mac", "C9-AM", "C10-AM", "C11-Eos", "C12-Epithelial Cell")
+
+
+my_palette <- c("#ff9305", "#56B4E9", "#009E73", "#F0E442", "#0072B2",
+                "#877f5f", "#CC79A7", "#c0bec2", "#854e07", "#a865eb",
+                "#00A087", "#FF9DA7", "#A55AFF", "#8C4B4B", "#00A08E")
+
+DimPlot(Lavage_cellsHive, reduction = "umap", label = T, cols = my_palette)
+```
+
+```{r fig.width=20, fig.height=8}
+Marker_gene <- c("FABP4", "MARCO", "CD68", "C1QC", "MRC1", "MKI67", "TOP2A", "CSF1R", "VCAN", "CD14",
+"MAFB", "CSF3R", "FCGR3B", "CXCR2", "S100A8", "S100A9", "CD3E", "CD8A", "GZMB",
+"KLGR1", "KLRK1", "CD4", "IL7R", "KIT", "CPA3", "EPCAM", "KRT8", "CDH1", "SIGLEC8", "CCR3",
+"SYNE1")
+
+DotPlot(Lavage_cellsHive, features = Marker_gene, cols = c("lightgray", "darkorange"), group.by = "Annotation") + theme_classic() + scale_size(range = c(0,12)) + theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.text = element_text(size = 35),
+           legend.text	 = element_text(size = 25), legend.key.height= unit(1, 'cm'),
+        legend.key.width= unit(2, 'cm'))
+
+#ggsave("plot_lastMinute/Dotplot_Hive.pdf", width = 35, height = 10)
+```
+
+```{r fig.width=6, fig.height=4}
+FeaturePlot(Lavage_cellsHive, features = c("nFeature_RNA"))+ scale_color_gradient(low = "grey", high = "darkorange", limit = c(0,7960) )
+#ggsave("/nFeature_hive.pdf", width = 8, height = 4)
+```
+
+
+```{r}
+sessionInfo()
+```
+
+
