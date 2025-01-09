@@ -1,0 +1,125 @@
+---
+title: "Integration 10x Hive"
+author: "Joan Abinet"
+date: "`r format (Sys.time(), format='%Y-%m-%d %H:%M:%S %z')`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+  header-includes:
+    -|
+    ```{=latex}
+    \usepackage{fvextra}
+    \DefineVerbatimEnvironment{Highlighting}{Verbatim}{
+      breaksymbolleft={}, 
+      showspaces = false,
+      showtabs = false,
+      breaklines,
+      commandchars=\\\{\}
+    }
+    ```
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(tidy.opts = list(width.cutoff = 50), tidy = TRUE)
+```
+
+# Load Packages
+```{r}
+suppressMessages(library(dplyr))
+suppressMessages(library(Seurat))
+suppressMessages(library(patchwork))
+suppressMessages(library(ggplot2))
+```
+
+# Loading Hive Data
+```{r, eval=FALSE}
+Cell_HiveAnnotate <- readRDS("../Hive-2-Annotation_cells/BAL_hive.annotated_noDB.rds")
+
+col <- c("#E2B80C", "#998025", "#AE8052", "#e6641e", "red", "#0F8140", "#4F2569", "#ABD6E4", "#1CB7D5", "#6B7BBA","#FFC0CB", "#BDBCBC", "#DF15AE")
+DimPlot(Cell_HiveAnnotate, group.by = "Annotation", cols = col)
+```
+
+# Loading 10X data
+```{r, eval=FALSE}
+Cell_10xAnnotate <- readRDS("../10x-2-Annotation_cells/BAL_10x.annotated_noDB.rds")
+
+col <- c("#E2B80C", "#998025", "#AE8052", "#0F8140", "#4F2569", "#ABD6E4", "#1CB7D5", "#6B7BBA", "#2D368B", "#DF15AE", "#BDBCBC")
+
+DimPlot(Cell_10xAnnotate, group.by = "Annotation", cols = col)+ theme(legend.text	 = element_text(size = 15)) + labs(title = NULL)
+```
+
+```{r, eval=FALSE}
+Cell_10xAnnotate$Annotation10x <- Cell_10xAnnotate$Annotation
+Cell_HiveAnnotate$AnnotationHive <- Cell_HiveAnnotate$Annotation
+```
+
+# Integration by CCA
+```{r, eval=FALSE}
+list_sample <- c(Cell_10xAnnotate,Cell_HiveAnnotate)
+
+list_sample <- lapply(list_sample, function(x) {
+  x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000)
+})
+
+features <- SelectIntegrationFeatures(list_sample)
+
+list_sample <- lapply(list_sample, function (x) {
+  x <- ScaleData(x, features = features)
+  x <- RunPCA(x, features = features)
+})
+
+
+BAL.anchors <- FindIntegrationAnchors(object.list = list_sample, anchor.features = features, reduction = "rpca")
+BAL_integrated <- IntegrateData(anchorset = BAL.anchors)
+```
+
+
+
+
+# Perform an integrated analysis
+```{r, eval=FALSE}
+DefaultAssay(BAL_integrated) <- "integrated"
+
+# Run the standard workflow for visualization and clustering
+BAL_integrated <- ScaleData(BAL_integrated, verbose = FALSE)
+BAL_integrated <- RunPCA(BAL_integrated, npcs = 30, verbose = FALSE)
+BAL_integrated <- RunUMAP(BAL_integrated, reduction = "pca", dims = 1:15)
+BAL_integrated <- FindNeighbors(BAL_integrated, reduction = "pca", dims = 1:15)
+BAL_integrated <- FindClusters(BAL_integrated, resolution = 0.5)
+```
+
+```{r}
+BAL_integrated <- readRDS("BAL_integrated.rds")
+```
+
+```{r}
+DimPlot(BAL_integrated, reduction = "umap", group.by = "orig.ident")
+DimPlot(BAL_integrated, reduction = "umap", group.by = "Annotation10x")
+```
+
+```{r}
+#DimPlot(BAL_integrated, reduction = "umap", group.by = "Annotation10x")
+BAL_integrated$Annotation10x <- as.factor(BAL_integrated$Annotation10x)
+levels(BAL_integrated$Annotation10x) <- c("AM","Mast cell","Epithelial cell","AM","AM", "Mafb+ MoMac", "Neu", "T cell", "T cell", "T cell", "T cell")
+
+colors <- c("#E2B80C","#DF15AE","#BDBCBC","#0F8140","#612773", "#ABD6E4")
+DimPlot(BAL_integrated, reduction = "umap", group.by = "Annotation10x", cols = colors)
+#ggsave("umap_Annotation10x.pdf", width = 8, height = 4)
+```
+
+```{r}
+#DimPlot(BAL_integrated, reduction = "umap", group.by = "AnnotationHive")
+BAL_integrated$AnnotationHive <- as.factor(BAL_integrated$AnnotationHive)
+levels(BAL_integrated$AnnotationHive) <- c("AM","T cell", "Eos","Epithelial cell", "Mast cell", "AM", "AM", "AM", "AM", "Mafb+ MoMac", "Neu", "T cell", "T cell")
+
+colors <- c("#E2B80C","#ABD6E4","#FFC0CB","#BDBCBC","#DF15AE", "#0F8140","#612773")
+
+DimPlot(BAL_integrated, reduction = "umap", group.by = "AnnotationHive", cols = colors)
+#ggsave("umap_AnnotationHive.pdf", width = 8, height = 4)
+```
+
+```{r}
+sessionInfo()
+```
+

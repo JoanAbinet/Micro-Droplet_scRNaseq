@@ -1,0 +1,131 @@
+---
+title: "Integrate 10x Samples"
+author: "Joan Abinet"
+date: "`r format (Sys.time(), format='%Y-%m-%d %H:%M:%S %z')`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+  header-includes:
+    -|
+    ```{=latex}
+    \usepackage{fvextra}
+    \DefineVerbatimEnvironment{Highlighting}{Verbatim}{
+      breaksymbolleft={}, 
+      showspaces = false,
+      showtabs = false,
+      breaklines,
+      commandchars=\\\{\}
+    }
+    ```
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(tidy.opts = list(width.cutoff = 60), tidy = TRUE)
+```
+
+# Load Packages
+```{r}
+suppressMessages(library(dplyr))
+suppressMessages(library(Seurat))
+suppressMessages(library(patchwork))
+suppressMessages(library(ggplot2))
+suppressMessages(library(stringr))
+suppressMessages(library(SingleCellExperiment))
+suppressMessages(library(scDblFinder))
+```
+
+# Loading data
+```{r, message=FALSE, warning=FALSE, results= "hide" }
+all_dirs <- dir(path = "Data", full.names = T)
+
+list_sample <- list()
+for (i in 1:length(all_dirs)) {
+  
+  Seq_raw_file <- Read10X(data.dir = paste0(all_dirs[i]))
+  Seurat_file <- CreateSeuratObject(counts = Seq_raw_file, project = str_sub(all_dirs[i],-8,-1), min.cells = 3, min.features =   150)
+  
+  Seurat_file[["percent.mt"]] <- PercentageFeatureSet(Seurat_file, pattern = "^MT-")
+  Seurat_file <- subset(Seurat_file, subset = nFeature_RNA > 400 & nCount_RNA > 800 & nFeature_RNA < 8000 & percent.mt < 20)# or 5 
+
+  list_sample <- append(list_sample, Seurat_file)
+}
+```
+
+```{r, message=FALSE, warning=FALSE, results= "hide" }
+list_sample <- lapply(list_sample, function(x) {
+  x <- NormalizeData(x, verbose = F)
+  x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000, verbose = F)
+})
+```
+
+```{r, message=FALSE, warning=FALSE, results= "hide" }
+features <- SelectIntegrationFeatures(list_sample, verbose = F)
+
+list_sample <- lapply(list_sample, function (x) {
+  x <- ScaleData(x, features = features, verbose = F)
+  x <- RunPCA(x, features = features, verbose = F)
+})
+```
+
+```{r, message=FALSE, warning=FALSE, results= "hide" }
+BAL.anchors <- FindIntegrationAnchors(object.list = list_sample, anchor.features = features, reduction = "rpca")
+
+BAL_10x.integrated <- IntegrateData(anchorset = BAL.anchors)
+```
+
+```{r, message=FALSE, warning=FALSE, results= "hide" }
+DefaultAssay(BAL_10x.integrated) <- "integrated"
+
+# Run the standard workflow for visualization and clustering
+BAL_10x.integrated <- ScaleData(BAL_10x.integrated, verbose = FALSE)
+BAL_10x.integrated <- RunPCA(BAL_10x.integrated, npcs = 30, verbose = FALSE)
+BAL_10x.integrated <- RunUMAP(BAL_10x.integrated, reduction = "pca", dims = 1:15)
+BAL_10x.integrated <- FindNeighbors(BAL_10x.integrated, reduction = "pca", dims = 1:15)
+BAL_10x.integrated <- FindClusters(BAL_10x.integrated, resolution = 0.35)
+```
+
+
+```{r}
+DimPlot(BAL_10x.integrated, reduction = "umap")
+```
+
+```{r}
+DimPlot(BAL_10x.integrated, reduction = "umap", group.by = "orig.ident")
+```
+
+
+# Identifying Doublets
+173 (6.1%) doublets called
+```{r, message=FALSE, warning=FALSE, results= "hide" }
+DefaultAssay(BAL_10x.integrated) <- "RNA"
+sce <- as.SingleCellExperiment(BAL_10x.integrated)
+sce <- scDblFinder(sce, clusters="seurat_clusters")
+
+setequal(colnames(sce), colnames(BAL_10x.integrated))
+
+BAL_10x.integrated$Doublets <- sce$scDblFinder.class
+```
+
+```{r}
+DimPlot(BAL_10x.integrated, group.by = "Doublets")
+```
+
+# Removing doublets and reclusters
+```{r, message=FALSE, warning=FALSE, results= "hide" }
+DefaultAssay(BAL_10x.integrated) <- "integrated"
+BAL_10x.integrated <- subset(BAL_10x.integrated, Doublets == "singlet")
+
+BAL_10x.integrated <- RunUMAP(BAL_10x.integrated, reduction = "pca", dims = 1:15)
+BAL_10x.integrated <- FindNeighbors(BAL_10x.integrated, reduction = "pca", dims = 1:15)
+BAL_10x.integrated <- FindClusters(BAL_10x.integrated, resolution = 0.5)
+```
+
+```{r, eval=FALSE}
+saveRDS(BAL_10x.integrated, "BAL_10x.integrated_noDB.rds")
+```
+
+```{r}
+sessionInfo()
+```
+

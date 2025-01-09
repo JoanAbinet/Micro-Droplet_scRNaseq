@@ -1,0 +1,137 @@
+---
+title: "Integrate Hive Samples"
+author: "Joan Abinet"
+date: "`r format (Sys.time(), format='%Y-%m-%d %H:%M:%S %z')`"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+  header-includes:
+    -|
+    ```{=latex}
+    \usepackage{fvextra}
+    \DefineVerbatimEnvironment{Highlighting}{Verbatim}{
+      breaksymbolleft={}, 
+      showspaces = false,
+      showtabs = false,
+      breaklines,
+      commandchars=\\\{\}
+    }
+    ```
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(tidy.opts = list(width.cutoff = 45), tidy = TRUE)
+```
+
+# Load Packages
+```{r}
+suppressMessages(library(dplyr))
+suppressMessages(library(Seurat))
+suppressMessages(library(patchwork))
+suppressMessages(library(ggplot2))
+suppressMessages(library(stringr))
+suppressMessages(library(SingleCellExperiment))
+suppressMessages(library(scDblFinder))
+```
+
+# Loading data
+Create your own data folder with the count Matrix from GEO (GSE276100)
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+all_dirs <- dir(path = "Data", full.names = T)
+
+list_sample <- list()
+for (dir in all_dirs) {
+  
+  files <- list.files(dir)
+  Count_file <- files[grep("TCM.tsv.gz$", files)]
+  Countdata <- read.table(paste0(dir,"/",Count_file), sep = "\t", header = T, row.names=1) 
+  
+  Lavage_cellsHive <- CreateSeuratObject(counts = Countdata, project = str_sub(dir,-5,-1), min.features = 100)
+  
+  Lavage_cellsHive[["percent.mt"]] <- PercentageFeatureSet(Lavage_cellsHive, pattern = "^MT-")# MT : human cells
+  Lavage_cellsHive <- subset(Lavage_cellsHive, subset = nFeature_RNA > 400 & nCount_RNA > 800 & nFeature_RNA < 8000 & percent.mt < 20)
+
+  list_sample <- append(list_sample, Lavage_cellsHive)
+}
+```
+
+
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+list_sample <- lapply(list_sample, function(x) {
+  x <- NormalizeData(x, verbose = F)
+  x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 2000, verbose = F)
+})
+```
+
+
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+features <- SelectIntegrationFeatures(list_sample)
+
+list_sample <- lapply(list_sample, function (x) {
+  x <- ScaleData(x, features = features, verbose = F)
+  x <- RunPCA(x, features = features, verbose = F)
+})
+```
+
+
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+BAL.anchors <- FindIntegrationAnchors(object.list = list_sample, anchor.features = features, reduction = "rpca", verbose = F)
+
+BAL_Hive.integrated <- IntegrateData(anchorset = BAL.anchors, verbose = F)
+```
+
+
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+DefaultAssay(BAL_Hive.integrated) <- "integrated"
+
+# Run the standard workflow for visualization and clustering
+BAL_Hive.integrated <- ScaleData(BAL_Hive.integrated, verbose = FALSE)
+BAL_Hive.integrated <- RunPCA(BAL_Hive.integrated, npcs = 30, verbose = FALSE)
+BAL_Hive.integrated <- RunUMAP(BAL_Hive.integrated, reduction = "pca", dims = 1:15)
+BAL_Hive.integrated <- FindNeighbors(BAL_Hive.integrated, reduction = "pca", dims = 1:15)
+BAL_Hive.integrated <- FindClusters(BAL_Hive.integrated, resolution = 0.5)
+```
+
+```{r}
+DimPlot(BAL_Hive.integrated, reduction = "umap", label = T)
+```
+
+```{r}
+DimPlot(BAL_Hive.integrated, reduction = "umap", group.by = "orig.ident")
+```
+
+# Identifying Doublets
+293 (7.3%) doublets called
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+DefaultAssay(BAL_Hive.integrated) <- "RNA"
+sce <- as.SingleCellExperiment(BAL_Hive.integrated)
+sce <- scDblFinder(sce, clusters="seurat_clusters")
+
+setequal(colnames(sce), colnames(BAL_Hive.integrated))
+
+BAL_Hive.integrated$Doublets <- sce$scDblFinder.class
+```
+
+```{r}
+DimPlot(BAL_Hive.integrated, group.by = "Doublets") 
+```
+
+# removing doublets
+```{r, message=FALSE, warning=FALSE, results= "hide"}
+DefaultAssay(BAL_Hive.integrated) <- "integrated"
+BAL_Hive.integrated <- subset(BAL_Hive.integrated, Doublets == "singlet")
+
+BAL_Hive.integrated <- RunUMAP(BAL_Hive.integrated, reduction = "pca", dims = 1:15)
+BAL_Hive.integrated <- FindNeighbors(BAL_Hive.integrated, reduction = "pca", dims = 1:15)
+BAL_Hive.integrated <- FindClusters(BAL_Hive.integrated, resolution = 0.5)
+```
+
+```{r, eval=FALSE}
+saveRDS(BAL_Hive.integrated, "Hive_integrated_noDB.rds")
+```
+
+```{r}
+sessionInfo()
+```
+
